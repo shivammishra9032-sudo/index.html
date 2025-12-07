@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 20px;
+      }
+
+      input {
+        padding: 6px;
+        margin-right: 6px;
+      }
+
+      button {
+        padding: 6px 10px;
+      }
+
+      #result {
+        margin-top: 20px;
+      }
+
+      #compareResult {
+        margin-top: 20px;
+        white-space: pre-line; /* so \n becomes new line */
+      }
+    </style>
+
+    <meta charset="UTF-8" />
+    <title>Weather & AQI Compare</title>
+  </head>
+  <body>
+    <h1>Weather & AQI Compare</h1>
+
+    <!-- Single city weather -->
+    <input type="text" placeholder="Enter city name" />
+    <button>Search</button>
+    <div id="result">Results will appear here...</div>
+
+    <hr />
+
+    <!-- Compare two cities (AQI) -->
+    <h2>Compare two cities (AQI)</h2>
+    <input id="city1" type="text" placeholder="First city" />
+    <input id="city2" type="text" placeholder="Second city" />
+    <button id="compareBtn">Compare</button>
+
+    <div id="compareResult">Comparison will appear here...</div>
+
+    <script>
+      // ---------- basic elements ----------
+      const button = document.querySelector("button"); // top "Search"
+      const input = document.querySelector("input");   // top input
+      const resultDiv = document.getElementById("result");
+
+      const city1Input = document.getElementById("city1");
+      const city2Input = document.getElementById("city2");
+      const compareBtn = document.getElementById("compareBtn");
+      const compareResultDiv = document.getElementById("compareResult");
+
+      // ---------- weather helpers (Open-Meteo) ----------
+
+      // Get latitude & longitude from city name
+      async function getCoordinates(city) {
+        const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(
+          city
+        )}&count=1`;
+
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error("Geocoding API error: " + response.status);
+        }
+
+        const data = await response.json();
+
+        if (!data.results || data.results.length === 0) {
+          throw new Error("City not found. Try another name.");
+        }
+
+        const place = data.results[0];
+
+        return {
+          name: place.name,
+          country: place.country,
+          lat: place.latitude,
+          lon: place.longitude,
+        };
+      }
+
+      // Get weather using latitude & longitude
+      async function getWeather(lat, lon) {
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m&timezone=auto`;
+
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error("Weather API error: " + response.status);
+        }
+
+        const data = await response.json();
+        const current = data.current;
+
+        return {
+          temp: current?.temperature_2m,
+          humidity: current?.relative_humidity_2m,
+        };
+      }
+
+      // ---------- AQI helpers (WAQI) ----------
+
+      // put your WAQI token here
+      const waqiToken = "e59bd65cd42ab51c6a36203a462b4ced0e845908"; // <-- replace this
+
+      // Get AQI for a city name using WAQI API
+      async function getAQI(city) {
+        const url = `https://api.waqi.info/feed/${encodeURIComponent(
+          city
+        )}/?token=${waqiToken}`;
+
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error("AQI network error: " + response.status);
+        }
+
+        const data = await response.json();
+
+        if (data.status !== "ok") {
+          // WAQI sends error info in data.data sometimes
+          const msg =
+            typeof data.data === "string"
+              ? data.data
+              : "AQI API error. Try a different city name.";
+          throw new Error(msg);
+        }
+
+        return data.data.aqi; // AQI number
+      }
+
+      // Turn AQI number into description
+      function getAQIDescription(aqi) {
+        if (aqi <= 50) return "Good";
+        if (aqi <= 100) return "Moderate";
+        if (aqi <= 150) return "Unhealthy for sensitive groups";
+        if (aqi <= 200) return "Unhealthy";
+        if (aqi <= 300) return "Very Unhealthy";
+        return "Hazardous";
+      }
+
+      // ---------- Single city weather search ----------
+      button.addEventListener("click", async () => {
+        const cityInput = input.value.trim();
+        if (cityInput === "") {
+          resultDiv.innerText = "Please enter a city name.";
+          return;
+        }
+
+        resultDiv.innerText = "Searching for " + cityInput + "...";
+
+        try {
+          const place = await getCoordinates(cityInput);
+          const weather = await getWeather(place.lat, place.lon);
+
+          if (weather.temp == null) {
+            resultDiv.innerText = "Could not read weather. Try another city.";
+            return;
+          }
+
+          resultDiv.innerText =
+            "Current weather in " +
+            place.name +
+            ", " +
+            place.country +
+            ":\n" +
+            "Temperature: " +
+            weather.temp +
+            "°C\n" +
+            "Humidity: " +
+            weather.humidity +
+            "%";
+        } catch (error) {
+          resultDiv.innerText = error.message;
+          console.error(error);
+        }
+      });
+
+      // ---------- Compare two cities by AQI ----------
+      compareBtn.addEventListener("click", async () => {
+        const c1 = city1Input.value.trim();
+        const c2 = city2Input.value.trim();
+
+        if (!c1 || !c2) {
+          compareResultDiv.innerText = "Please enter both city names.";
+          return;
+        }
+
+        compareResultDiv.innerText = "Comparing " + c1 + " and " + c2 + "...";
+
+        try {
+          // get AQI for both cities from WAQI
+          const [aqi1, aqi2] = await Promise.all([getAQI(c1), getAQI(c2)]);
+
+          if (aqi1 == null || aqi2 == null) {
+            compareResultDiv.innerText =
+              "Could not get AQI data for one or both cities.";
+            return;
+          }
+
+          const desc1 = getAQIDescription(aqi1);
+          const desc2 = getAQIDescription(aqi2);
+
+          let better;
+          if (aqi1 < aqi2) {
+            better =
+              `${c1} has cleaner air and a better living standard right now (lower AQI).`;
+          } else if (aqi2 < aqi1) {
+            better =
+              `${c2} has cleaner air and a better living standard right now (lower AQI).`;
+          } else {
+            better =
+              "Both cities have similar air quality and living standard (same AQI).";
+          }
+
+          compareResultDiv.innerText =
+            `City 1: ${c1}\n` +
+            `AQI: ${aqi1} (${desc1})\n\n` +
+            `City 2: ${c2}\n` +
+            `AQI: ${aqi2} (${desc2})\n\n` +
+            better;
+        } catch (error) {
+          compareResultDiv.innerText =
+            "Error while comparing: " + error.message;
+          console.error(error);
+        }
+      });
+    </script>
+  </body>
+</html>
+
